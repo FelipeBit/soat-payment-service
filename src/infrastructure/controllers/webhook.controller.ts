@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Body,
+  Param,
   HttpCode,
   HttpStatus,
   Headers,
@@ -11,13 +12,19 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBody,
+  ApiParam,
 } from '@nestjs/swagger';
 import { WebhookService, PaymentWebhookPayload } from '../../application/services/webhook.service';
+import { PaymentService } from '../../application/services/payment.service';
+import { PaymentStatus } from '../../domain/entities/payment.entity';
 
 @ApiTags('webhooks')
 @Controller('webhooks')
 export class WebhookController {
-  constructor(private readonly webhookService: WebhookService) {}
+  constructor(
+    private readonly webhookService: WebhookService,
+    private readonly paymentService: PaymentService,
+  ) {}
 
   @Post('payment')
   @HttpCode(HttpStatus.OK)
@@ -51,22 +58,29 @@ export class WebhookController {
   @Post('mock/approve/:orderId')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mock endpoint to approve payment (for testing)' })
-  async mockApprovePayment(@Body() body: { orderId: string }) {
+  @ApiParam({ name: 'orderId', type: String, description: 'Order ID to approve payment' })
+  async mockApprovePayment(@Param('orderId') orderId: string) {
     // This is a mock endpoint for testing
     // In production, this would come from Mercado Pago webhook
-    const mockPayload: PaymentWebhookPayload = {
-      id: Date.now(),
-      type: 'payment',
-      data: { id: body.orderId },
-      action: 'payment.updated',
-      date_created: new Date().toISOString(),
-      user_id: 12345,
-      api_version: 'v1',
-      live_mode: false,
-    };
+    try {
+      // Find payment by orderId
+      const payment = await this.paymentService.getPaymentByOrderId(orderId);
+      
+      // Update payment status to APPROVED
+      const updatedPayment = await this.paymentService.updatePaymentStatus(
+        payment.getId(),
+        PaymentStatus.APPROVED,
+      );
 
-    await this.webhookService.processPaymentWebhook(mockPayload);
-    return { message: 'Payment approved (mock)' };
+      return {
+        message: 'Payment approved (mock)',
+        paymentId: updatedPayment.getId(),
+        orderId: updatedPayment.getOrderId(),
+        status: updatedPayment.getStatus(),
+      };
+    } catch (error) {
+      throw error;
+    }
   }
 }
 
