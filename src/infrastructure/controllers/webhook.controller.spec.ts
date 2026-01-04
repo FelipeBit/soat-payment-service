@@ -1,14 +1,50 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WebhookController } from './webhook.controller';
 import { WebhookService, PaymentWebhookPayload } from '../../application/services/webhook.service';
+import { PaymentService } from '../../application/services/payment.service';
+import { Payment, PaymentStatus, PaymentMethod } from '../../domain/entities/payment.entity';
 
 describe('WebhookController', () => {
   let controller: WebhookController;
   let webhookService: jest.Mocked<WebhookService>;
+  let paymentService: jest.Mocked<PaymentService>;
 
   beforeEach(async () => {
     const mockWebhookService = {
       processPaymentWebhook: jest.fn(),
+    };
+
+    const mockPayment = new Payment(
+      'payment-1',
+      'order-1',
+      100.0,
+      'Test payment',
+      PaymentStatus.PENDING,
+      PaymentMethod.QR_CODE,
+      null,
+      null,
+      null,
+      new Date(),
+      new Date(),
+    );
+
+    const mockApprovedPayment = new Payment(
+      'payment-1',
+      'order-1',
+      100.0,
+      'Test payment',
+      PaymentStatus.APPROVED,
+      PaymentMethod.QR_CODE,
+      null,
+      null,
+      null,
+      new Date(),
+      new Date(),
+    );
+
+    const mockPaymentService = {
+      getPaymentByOrderId: jest.fn().mockResolvedValue(mockPayment),
+      updatePaymentStatus: jest.fn().mockResolvedValue(mockApprovedPayment),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -18,11 +54,16 @@ describe('WebhookController', () => {
           provide: WebhookService,
           useValue: mockWebhookService,
         },
+        {
+          provide: PaymentService,
+          useValue: mockPaymentService,
+        },
       ],
     }).compile();
 
     controller = module.get<WebhookController>(WebhookController);
     webhookService = module.get(WebhookService);
+    paymentService = module.get(PaymentService);
   });
 
   afterEach(() => {
@@ -54,13 +95,15 @@ describe('WebhookController', () => {
 
   describe('mockApprovePayment', () => {
     it('should approve payment via mock endpoint', async () => {
-      webhookService.processPaymentWebhook.mockResolvedValue(undefined);
-
-      const result = await controller.mockApprovePayment({ orderId: 'order-1' });
+      const result = await controller.mockApprovePayment('order-1');
 
       expect(result).toBeDefined();
       expect(result.message).toBe('Payment approved (mock)');
-      expect(webhookService.processPaymentWebhook).toHaveBeenCalled();
+      expect(result.paymentId).toBe('payment-1');
+      expect(result.orderId).toBe('order-1');
+      expect(result.status).toBe(PaymentStatus.APPROVED);
+      expect(paymentService.getPaymentByOrderId).toHaveBeenCalledWith('order-1');
+      expect(paymentService.updatePaymentStatus).toHaveBeenCalledWith('payment-1', PaymentStatus.APPROVED);
     });
   });
 });
