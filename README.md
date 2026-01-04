@@ -41,10 +41,14 @@ docker-compose up payment-service
 ```env
 PORT=3002
 NODE_ENV=production
-MONGODB_URI=mongodb://username:password@docdb-cluster-endpoint.cluster-xxxxx.docdb.amazonaws.com:27017/payment_db?tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false
+MONGODB_URI=mongodb://username:password@docdb-cluster-endpoint.cluster-xxxxx.docdb.amazonaws.com:27017/payment_db?tls=true&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false&authMechanism=SCRAM-SHA-1
 MERCADO_PAGO_ACCESS_TOKEN=your-token
-ORDER_SERVICE_URL=http://order-service:3001
+ORDER_SERVICE_URL=http://internal-k8s-soatalb-36c7e2e1c7-1844691046.us-east-1.elb.amazonaws.com
 ```
+
+**⚠️ IMPORTANTE sobre ORDER_SERVICE_URL:**
+- Para **EKS/Kubernetes**, use o ALB consolidado interno: `http://internal-k8s-soatalb-36c7e2e1c7-1844691046.us-east-1.elb.amazonaws.com`
+- Alternativamente, pode usar o formato Kubernetes Service: `http://order-service.order.svc.cluster.local:3001` (apenas dentro do cluster)
 
 ### Para Desenvolvimento Local
 
@@ -53,7 +57,7 @@ PORT=3002
 NODE_ENV=development
 MONGODB_URI=mongodb://localhost:27017/payment_db
 MERCADO_PAGO_ACCESS_TOKEN=your-token
-ORDER_SERVICE_URL=http://order-service:3001
+ORDER_SERVICE_URL=http://localhost:3001
 ```
 
 **Nota:** Veja o arquivo `.env.example` para mais detalhes.
@@ -65,6 +69,7 @@ ORDER_SERVICE_URL=http://order-service:3001
 - `GET /payments/:id` - Status do pagamento
 - `GET /payments/order/:orderId` - Pagamento por pedido
 - `POST /webhooks/payment` - Webhook do Mercado Pago
+- `POST /webhooks/mock/approve/:orderId` - Mock endpoint para aprovar pagamento (apenas para testes)
 
 ## 📚 Documentação Swagger
 

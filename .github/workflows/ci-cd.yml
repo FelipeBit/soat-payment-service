@@ -248,9 +248,23 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/payment_db}"
-            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
-            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://order-service.order.svc.cluster.local:3001}"
+            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
+            if [ -z "$MONGODB_URI" ]; then
+              echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
+              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$ORDER_SERVICE_URL" ]; then
+              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
+              exit 1
+            fi
+            # Exportar as variáveis para envsubst (sem valor padrão)
+            export MONGODB_URI
+            export MERCADO_PAGO_ACCESS_TOKEN
+            export ORDER_SERVICE_URL
             envsubst < k8s/secret.yaml | kubectl apply -f -
           else
             echo "Warning: k8s/secret.yaml not found, creating default secret"
@@ -387,9 +401,23 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/payment_db}"
-            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
-            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://order-service.order.svc.cluster.local:3001}"
+            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
+            if [ -z "$MONGODB_URI" ]; then
+              echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
+              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$ORDER_SERVICE_URL" ]; then
+              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
+              exit 1
+            fi
+            # Exportar as variáveis para envsubst (sem valor padrão)
+            export MONGODB_URI
+            export MERCADO_PAGO_ACCESS_TOKEN
+            export ORDER_SERVICE_URL
             envsubst < k8s/secret.yaml | kubectl apply -f -
           else
             echo "Warning: k8s/secret.yaml not found, creating default secret"
