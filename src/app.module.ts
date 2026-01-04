@@ -13,9 +13,26 @@ import { HealthController } from './infrastructure/controllers/health.controller
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        uri: configService.get('MONGODB_URI', 'mongodb://localhost:27017/payment_db'),
-      }),
+      useFactory: (configService: ConfigService) => {
+        const uri = configService.get(
+          'MONGODB_URI',
+          'mongodb://localhost:27017/payment_db',
+        );
+
+        // For AWS DocumentDB, ensure TLS and replicaSet parameters are included
+        const options: any = {};
+
+        if (uri.includes('docdb') || uri.includes('tls=true')) {
+          // DocumentDB requires TLS and specific connection options
+          options.tls = true;
+          options.tlsAllowInvalidCertificates = true; // DocumentDB uses self-signed certificates
+        }
+
+        return {
+          uri,
+          ...options,
+        };
+      },
       inject: [ConfigService],
     }),
     HttpModule.register({
@@ -28,4 +45,3 @@ import { HealthController } from './infrastructure/controllers/health.controller
   controllers: [HealthController],
 })
 export class AppModule {}
-

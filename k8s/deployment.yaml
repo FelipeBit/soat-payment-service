@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: payment
+  labels:
+    app: payment-service
+    environment: ${ENVIRONMENT}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+      - name: payment-service
+        image: ${PAYMENT_SERVICE_IMAGE}:${PAYMENT_SERVICE_TAG}
+        ports:
+        - containerPort: 3002
+          name: http
+        env:
+        - name: NODE_ENV
+          value: ${ENVIRONMENT}
+        - name: PORT
+          value: "3002"
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: payment-service-secrets
+              key: mongodb-uri
+        - name: MERCADO_PAGO_ACCESS_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: payment-service-secrets
+              key: mercado-pago-access-token
+        - name: ORDER_SERVICE_URL
+          valueFrom:
+            secretKeyRef:
+              name: payment-service-secrets
+              key: order-service-url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3002
+          initialDelaySeconds: 10
+          periodSeconds: 5
+

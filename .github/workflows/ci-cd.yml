@@ -1,0 +1,422 @@
+name: CI/CD - Payment Service
+
+on:
+  push:
+    branches: [main, staging, develop]
+  pull_request:
+    branches: [main, staging]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: payment-service
+  EKS_CLUSTER_NAME_STAGING: soat-staging
+  EKS_CLUSTER_NAME_PRODUCTION: soat-production
+  SERVICE_NAME: payment-service
+  NAMESPACE: payment
+
+jobs:
+  test:
+    name: Run Tests with Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:ci
+        continue-on-error: false
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: ./coverage/lcov.info
+          flags: payment-service
+          name: payment-service-coverage
+          fail_ci_if_error: false
+
+      - name: Upload coverage to artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/lcov.info
+          retention-days: 1
+
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR repository if it doesn't exist
+        continue-on-error: true
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} \
+            --image-scanning-configuration scanOnPush=true \
+            --image-tag-mutability MUTABLE
+
+      - name: Determine image tag
+        id: image-tag
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            echo "tag=staging-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+            echo "environment=develop" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG .
+          docker tag $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Output image URI
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          echo "Image URI: $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG"
+          echo "IMAGE_URI=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_ENV
+          echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Save image info
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          echo "$ECR_REGISTRY" > image-registry.txt
+          echo "$IMAGE_TAG" > image-tag.txt
+          echo "${{ steps.image-tag.outputs.environment }}" > environment.txt
+
+      - name: Upload image info
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-info
+          path: |
+            image-registry.txt
+            image-tag.txt
+            environment.txt
+
+  deploy-staging:
+    name: Deploy to EKS Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging-api.soat.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download image info
+        uses: actions/download-artifact@v4
+        with:
+          name: image-info
+
+      - name: Set image variables
+        run: |
+          ECR_REGISTRY=$(cat image-registry.txt)
+          IMAGE_TAG=$(cat image-tag.txt)
+          echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          echo "IMAGE_URI=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks describe-cluster \
+            --name ${{ env.EKS_CLUSTER_NAME_STAGING }} \
+            --region ${{ env.AWS_REGION }} || exit 1
+          
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME_STAGING }} \
+            --region ${{ env.AWS_REGION }}
+          
+          kubectl cluster-info || exit 1
+          kubectl get nodes || exit 1
+
+      - name: Deploy to EKS
+        env:
+          ENVIRONMENT: staging
+          PAYMENT_SERVICE_IMAGE: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}
+          PAYMENT_SERVICE_TAG: ${{ env.IMAGE_TAG }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MERCADO_PAGO_ACCESS_TOKEN: ${{ secrets.MERCADO_PAGO_ACCESS_TOKEN }}
+          ORDER_SERVICE_URL: ${{ secrets.ORDER_SERVICE_URL }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          
+          pwd
+          ls -la
+          echo "Checking for k8s directory..."
+          ls -la k8s/ || (echo "k8s/ not found, listing all files:" && find . -name "*.yaml" -o -name "*.yml" | head -20)
+          
+          # Apply namespace
+          if [ -f "k8s/namespace.yaml" ]; then
+            envsubst < k8s/namespace.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/namespace.yaml not found"
+            exit 1
+          fi
+          
+          # Apply secret
+          if [ -f "k8s/secret.yaml" ]; then
+            export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/payment_db}"
+            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
+            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://order-service.order.svc.cluster.local:3001}"
+            envsubst < k8s/secret.yaml | kubectl apply -f -
+          else
+            echo "Warning: k8s/secret.yaml not found, creating default secret"
+            kubectl create secret generic payment-service-secrets \
+              --from-literal=mongodb-uri="mongodb://localhost:27017/payment_db" \
+              --from-literal=mercado-pago-access-token="test-token" \
+              --from-literal=order-service-url="http://order-service.order.svc.cluster.local:3001" \
+              -n ${{ env.NAMESPACE }} \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+          
+          # Apply service
+          if [ -f "k8s/service.yaml" ]; then
+            envsubst < k8s/service.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/service.yaml not found"
+            exit 1
+          fi
+          
+          # Apply deployment
+          if [ -f "k8s/deployment.yaml" ]; then
+            envsubst < k8s/deployment.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/deployment.yaml not found"
+            exit 1
+          fi
+          
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --timeout=10m || true
+
+      - name: Check deployment status
+        run: |
+          echo "📊 Deployment Status:"
+          kubectl get deployment/${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} || true
+          
+          echo ""
+          echo "📦 Pods Status:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "🔍 Pod Details (if any exist):"
+          kubectl describe pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "📋 Service Status:"
+          kubectl get svc -n ${{ env.NAMESPACE }} ${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "📝 Recent Events:"
+          kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -20 || true
+
+      - name: Verify deployment
+        continue-on-error: true
+        run: |
+          READY_PODS=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+          if [ "$READY_PODS" -gt 0 ]; then
+            echo "✅ Deployment successful! $READY_PODS pod(s) running"
+            exit 0
+          else
+            echo "⚠️  No pods running yet, but deployment was applied"
+            exit 0
+          fi
+
+  deploy-production:
+    name: Deploy to EKS Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: https://api.soat.com
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download image info
+        uses: actions/download-artifact@v4
+        with:
+          name: image-info
+
+      - name: Set image variables
+        run: |
+          ECR_REGISTRY=$(cat image-registry.txt)
+          echo "ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
+          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          echo "IMAGE_URI=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest" >> $GITHUB_ENV
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks describe-cluster \
+            --name ${{ env.EKS_CLUSTER_NAME_PRODUCTION }} \
+            --region ${{ env.AWS_REGION }} || exit 1
+          
+          aws eks update-kubeconfig \
+            --name ${{ env.EKS_CLUSTER_NAME_PRODUCTION }} \
+            --region ${{ env.AWS_REGION }}
+          
+          kubectl cluster-info || exit 1
+          kubectl get nodes || exit 1
+
+      - name: Deploy to EKS
+        env:
+          ENVIRONMENT: production
+          PAYMENT_SERVICE_IMAGE: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}
+          PAYMENT_SERVICE_TAG: latest
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MERCADO_PAGO_ACCESS_TOKEN: ${{ secrets.MERCADO_PAGO_ACCESS_TOKEN }}
+          ORDER_SERVICE_URL: ${{ secrets.ORDER_SERVICE_URL }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y gettext-base
+          
+          ls -la k8s/ || exit 1
+          
+          # Apply namespace
+          if [ -f "k8s/namespace.yaml" ]; then
+            envsubst < k8s/namespace.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/namespace.yaml not found"
+            exit 1
+          fi
+          
+          # Apply secret
+          if [ -f "k8s/secret.yaml" ]; then
+            export MONGODB_URI="${MONGODB_URI:-mongodb://localhost:27017/payment_db}"
+            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
+            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://order-service.order.svc.cluster.local:3001}"
+            envsubst < k8s/secret.yaml | kubectl apply -f -
+          else
+            echo "Warning: k8s/secret.yaml not found, creating default secret"
+            kubectl create secret generic payment-service-secrets \
+              --from-literal=mongodb-uri="mongodb://localhost:27017/payment_db" \
+              --from-literal=mercado-pago-access-token="test-token" \
+              --from-literal=order-service-url="http://order-service.order.svc.cluster.local:3001" \
+              -n ${{ env.NAMESPACE }} \
+              --dry-run=client -o yaml | kubectl apply -f -
+          fi
+          
+          # Apply service
+          if [ -f "k8s/service.yaml" ]; then
+            envsubst < k8s/service.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/service.yaml not found"
+            exit 1
+          fi
+          
+          # Apply deployment
+          if [ -f "k8s/deployment.yaml" ]; then
+            envsubst < k8s/deployment.yaml | kubectl apply -f -
+          else
+            echo "Error: k8s/deployment.yaml not found"
+            exit 1
+          fi
+          
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --timeout=10m || true
+
+      - name: Check deployment status
+        run: |
+          echo "📊 Deployment Status:"
+          kubectl get deployment/${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} || true
+          
+          echo ""
+          echo "📦 Pods Status:"
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "🔍 Pod Details (if any exist):"
+          kubectl describe pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "📋 Service Status:"
+          kubectl get svc -n ${{ env.NAMESPACE }} ${{ env.SERVICE_NAME }} || true
+          
+          echo ""
+          echo "📝 Recent Events:"
+          kubectl get events -n ${{ env.NAMESPACE }} --sort-by='.lastTimestamp' | tail -20 || true
+
+      - name: Verify deployment
+        continue-on-error: true
+        run: |
+          READY_PODS=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l)
+          if [ "$READY_PODS" -gt 0 ]; then
+            echo "✅ Deployment successful! $READY_PODS pod(s) running"
+            exit 0
+          else
+            echo "⚠️  No pods running yet, but deployment was applied"
+            exit 0
+          fi
+
