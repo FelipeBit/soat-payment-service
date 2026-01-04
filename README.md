@@ -75,6 +75,21 @@ ORDER_SERVICE_URL=http://localhost:3001
 
 Acesse: http://localhost:3002/api
 
+## 🚀 CI/CD
+
+Este serviço possui CI/CD configurado via GitHub Actions que:
+- Executa testes com cobertura
+- Executa análise de qualidade de código (ESLint + TypeScript + npm audit)
+- Faz build e push da imagem Docker para ECR
+- **Deploy manual via workflow_dispatch** (não permite push direto para staging/main)
+
+### Análise de Código
+
+O projeto usa ferramentas gratuitas e nativas:
+- **ESLint** - Análise de qualidade e padrões de código
+- **TypeScript** - Verificação de tipos
+- **npm audit** - Verificação de vulnerabilidades em dependências
+
 ## 🔗 Dependências
 
 - Order Service (HTTP)

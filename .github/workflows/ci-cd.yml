@@ -68,10 +68,42 @@ jobs:
           path: coverage/lcov.info
           retention-days: 1
 
+  code-quality:
+    name: Code Quality & Security Analysis
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true  # Não bloqueia o workflow se houver problemas
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint || echo "⚠️ Linting issues found (non-blocking)"
+
+      - name: Run TypeScript type check
+        run: npx tsc --noEmit || echo "⚠️ TypeScript errors found (non-blocking)"
+
+      - name: Security Scan with npm audit
+        run: npm audit --audit-level=moderate || echo "⚠️ Security vulnerabilities found (non-blocking)"
+        continue-on-error: true
+
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, code-quality]
     # Roda em push para main/staging OU via workflow_dispatch
     # Permite deploy automático após merge em staging/main
     if: |
@@ -248,15 +280,23 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            # Garantir que MONGODB_URI está definida (obrigatória)
+            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
             if [ -z "$MONGODB_URI" ]; then
               echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
               exit 1
             fi
-            # Variáveis opcionais com valores padrão
+            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
+              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$ORDER_SERVICE_URL" ]; then
+              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
+              exit 1
+            fi
+            # Exportar as variáveis para envsubst (sem valor padrão)
             export MONGODB_URI
-            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
-            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://internal-k8s-soatalb-36c7e2e1c7-1844691046.us-east-1.elb.amazonaws.com}"
+            export MERCADO_PAGO_ACCESS_TOKEN
+            export ORDER_SERVICE_URL
             envsubst < k8s/secret.yaml | kubectl apply -f -
           else
             echo "Warning: k8s/secret.yaml not found, creating default secret"
@@ -393,15 +433,23 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            # Garantir que MONGODB_URI está definida (obrigatória)
+            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
             if [ -z "$MONGODB_URI" ]; then
               echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
               exit 1
             fi
-            # Variáveis opcionais com valores padrão
+            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
+              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
+              exit 1
+            fi
+            if [ -z "$ORDER_SERVICE_URL" ]; then
+              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
+              exit 1
+            fi
+            # Exportar as variáveis para envsubst (sem valor padrão)
             export MONGODB_URI
-            export MERCADO_PAGO_ACCESS_TOKEN="${MERCADO_PAGO_ACCESS_TOKEN:-test-token}"
-            export ORDER_SERVICE_URL="${ORDER_SERVICE_URL:-http://internal-k8s-soatalb-36c7e2e1c7-1844691046.us-east-1.elb.amazonaws.com}"
+            export MERCADO_PAGO_ACCESS_TOKEN
+            export ORDER_SERVICE_URL
             envsubst < k8s/secret.yaml | kubectl apply -f -
           else
             echo "Warning: k8s/secret.yaml not found, creating default secret"
