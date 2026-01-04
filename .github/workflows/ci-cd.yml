@@ -5,6 +5,19 @@ on:
     branches: [main, staging, develop]
   pull_request:
     branches: [main, staging]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      branch:
+        description: 'Branch to deploy (leave empty for current branch)'
+        required: false
+        type: string
 
 env:
   AWS_REGION: us-east-1
@@ -59,7 +72,11 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
     needs: [test]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
+    # Roda em push para main/staging OU via workflow_dispatch
+    # Permite deploy automático após merge em staging/main
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')) ||
+      github.event_name == 'workflow_dispatch'
     
     steps:
       - name: Checkout code
@@ -89,7 +106,16 @@ jobs:
       - name: Determine image tag
         id: image-tag
         run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Deploy manual: usa o environment selecionado
+            if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+              echo "tag=latest" >> $GITHUB_OUTPUT
+              echo "environment=production" >> $GITHUB_OUTPUT
+            else
+              echo "tag=staging-$(date +%Y%m%d)-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+              echo "environment=staging" >> $GITHUB_OUTPUT
+            fi
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
             echo "tag=latest" >> $GITHUB_OUTPUT
             echo "environment=production" >> $GITHUB_OUTPUT
           elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
@@ -148,7 +174,10 @@ jobs:
     name: Deploy to EKS Staging
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
+    # Roda automaticamente em push para staging OU via workflow_dispatch
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/staging') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
     environment:
       name: staging
       url: https://staging-api.soat.com
@@ -288,7 +317,10 @@ jobs:
     name: Deploy to EKS Production
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Roda automaticamente em push para main OU via workflow_dispatch
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
     environment:
       name: production
       url: https://api.soat.com
