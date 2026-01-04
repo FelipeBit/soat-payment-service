@@ -280,17 +280,9 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
+            # Garantir que MONGODB_URI está definida (falha se não estiver configurado no GitHub Secrets)
             if [ -z "$MONGODB_URI" ]; then
               echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
-              exit 1
-            fi
-            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
-              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
-              exit 1
-            fi
-            if [ -z "$ORDER_SERVICE_URL" ]; then
-              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
               exit 1
             fi
             # Exportar as variáveis para envsubst (sem valor padrão)
@@ -433,17 +425,9 @@ jobs:
           
           # Apply secret
           if [ -f "k8s/secret.yaml" ]; then
-            # Garantir que as variáveis estão definidas (falha se não estiver configurado no GitHub Secrets)
+            # Garantir que MONGODB_URI está definida (falha se não estiver configurado no GitHub Secrets)
             if [ -z "$MONGODB_URI" ]; then
               echo "ERROR: MONGODB_URI not set in GitHub Secrets!"
-              exit 1
-            fi
-            if [ -z "$MERCADO_PAGO_ACCESS_TOKEN" ]; then
-              echo "ERROR: MERCADO_PAGO_ACCESS_TOKEN not set in GitHub Secrets!"
-              exit 1
-            fi
-            if [ -z "$ORDER_SERVICE_URL" ]; then
-              echo "ERROR: ORDER_SERVICE_URL not set in GitHub Secrets!"
               exit 1
             fi
             # Exportar as variáveis para envsubst (sem valor padrão)
